@@ -26,9 +26,7 @@ source_deb=${matching_debs[0]}
 work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT
 mkdir -p "$work_dir/data"
-(cd "$work_dir" && ar -x "$PWD/$OLDPWD/$source_deb") 2>/dev/null || {
-    (cd "$work_dir" && ar -x "$GITHUB_WORKSPACE/$source_deb")
-}
+(cd "$work_dir" && ar -x "$GITHUB_WORKSPACE/$source_deb")
 data_archives=("$work_dir"/data.tar.*)
 if [[ "${#data_archives[@]}" -ne 1 ]]; then
     echo "Expected exactly one data.tar archive, found ${#data_archives[@]}" >&2
