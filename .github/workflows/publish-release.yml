@@ -13,12 +13,32 @@ permissions:
   actions: read
   contents: write
 
+concurrency:
+  group: dyyy3-release
+  cancel-in-progress: false
+
 jobs:
   publish:
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
+      - name: Confirm this is the latest main build
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          latest_sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq '.sha')
+          if [[ "$SOURCE_SHA" != "$latest_sha" ]]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping stale build $SOURCE_SHA; main is now $latest_sha."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Download build artifacts
+        if: steps.latest.outputs.publish == 'true'
         uses: actions/download-artifact@v4
         with:
           name: DYYY
@@ -26,6 +46,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Validate release files
+        if: steps.latest.outputs.publish == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -61,6 +82,7 @@ jobs:
           printf '  %s\n' packages/*
 
       - name: Publish or update v3.0 Release
+        if: steps.latest.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: v3.0
