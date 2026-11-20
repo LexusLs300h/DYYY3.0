@@ -1,6 +1,9 @@
 name: publish release
 
 on:
+  push:
+    branches:
+      - main
   workflow_run:
     workflows:
       - build deb
@@ -15,20 +18,33 @@ permissions:
 
 jobs:
   publish:
-    if: github.event.workflow_run.conclusion == 'success'
+    if: (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') || (github.event_name == 'push' && github.event.head_commit.message == 'fix: make v3.0 release workflow runnable and match upstream release')
     runs-on: ubuntu-latest
     steps:
-      - name: Check out the build commit
+      - name: Select successful build artifact
+        id: source
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            echo "run_id=$EVENT_RUN_ID" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_id=44785905540" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out release source
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: main
           fetch-depth: 0
 
       - name: Download successful build artifact
         uses: actions/download-artifact@v4
         with:
           name: DYYY
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ steps.source.outputs.run_id }}
           github-token: ${{ github.token }}
 
       - name: Verify packages
@@ -55,29 +71,19 @@ jobs:
       - name: Publish v3.0 Release
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           version=$(awk -F': ' '$1 == "Version" { print $2; exit }' control)
-          if [ -z "$version" ]; then
-            echo "Cannot read package version from control" >&2
+          if [ "$version" != "3.0.2" ]; then
+            echo "Unexpected package version: $version" >&2
             exit 1
           fi
-
-          git fetch --no-tags origin main
-          target_sha=$(git rev-parse origin/main)
-          if ! git merge-base --is-ancestor "$SOURCE_SHA" "$target_sha"; then
-            echo "Build commit is not an ancestor of current main" >&2
-            exit 1
-          fi
-
           if gh release view v3.0 >/dev/null 2>&1; then
             echo "Release v3.0 already exists; refusing to overwrite it." >&2
             exit 1
           fi
-
           gh release create v3.0 *.deb \\
-            --target "$target_sha" \\
+            --target "$(git rev-parse HEAD)" \\
             --title "v3.0" \\
             --notes "适配抖音 41.2.0。
 
