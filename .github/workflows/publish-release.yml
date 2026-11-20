@@ -1,0 +1,90 @@
+name: publish release
+
+on:
+  workflow_run:
+    workflows:
+      - build deb
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: DYYY
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p packages
+          for file in *.deb *.dylib; do
+            [ -f "$file" ] && mv "$file" packages/
+          done
+          for file in packages/*/*.deb packages/*/*.dylib; do
+            [ -f "$file" ] && mv "$file" packages/
+          done
+
+          deb_files=(packages/*.deb)
+          dylib_files=(packages/*.dylib)
+          if [ "${#deb_files[@]}" -ne 3 ]; then
+            echo "Expected exactly 3 .deb files, found ${#deb_files[@]}" >&2
+            printf '  %s\n' "${deb_files[@]}" >&2
+            exit 1
+          fi
+          if [ "${#dylib_files[@]}" -ne 1 ]; then
+            echo "Expected exactly 1 .dylib file, found ${#dylib_files[@]}" >&2
+            printf '  %s\n' "${dylib_files[@]}" >&2
+            exit 1
+          fi
+          for arch in arm arm64 arm64e; do
+            matches=(packages/*_iphoneos-"$arch".deb)
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "Expected exactly one $arch package, found ${#matches[@]}" >&2
+              exit 1
+            fi
+          done
+          echo "Validated assets:"
+          printf '  %s\n' packages/*
+
+      - name: Publish or update v3.0 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v3.0
+        run: |
+          set -euo pipefail
+          notes_file=$(mktemp)
+          cat > "$notes_file" <<'NOTES'
+          适配抖音 41.2.0。
+
+          按越狱环境选择安装包：
+          - `*_iphoneos-arm64e.deb` — roothide
+          - `*_iphoneos-arm64.deb` — rootless
+          - `*_iphoneos-arm.deb` — rootful（传统有根）
+
+          另附 DYYY 动态库（.dylib）。
+          NOTES
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" packages/*.deb packages/*.dylib --clobber
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file "$notes_file" --latest
+          else
+            gh release create "$RELEASE_TAG" packages/*.deb packages/*.dylib \
+              --title "$RELEASE_TAG" \
+              --notes-file "$notes_file" \
+              --latest
+          fi
+          rm -f "$notes_file"
