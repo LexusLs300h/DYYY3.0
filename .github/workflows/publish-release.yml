@@ -1,4 +1,5 @@
 name: publish release
+
 on:
   workflow_run:
     workflows:
@@ -7,20 +8,29 @@ on:
       - completed
     branches:
       - main
+
 permissions:
   actions: read
   contents: write
+
 jobs:
   publish:
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
+      - name: Check out the build commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
       - name: Download successful build artifact
         uses: actions/download-artifact@v4
         with:
           name: DYYY
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
+
       - name: Verify packages
         shell: bash
         run: |
@@ -29,7 +39,7 @@ jobs:
           debs=( *.deb )
           if [ "${#debs[@]}" -ne 3 ]; then
             echo "Expected 3 Debian packages, found ${#debs[@]}" >&2
-            printf '  %s\n' "${debs[@]}" >&2
+            printf '  %s\\n' "${debs[@]}" >&2
             exit 1
           fi
           for arch in arm arm64 arm64e; do
@@ -39,31 +49,40 @@ jobs:
               exit 1
             fi
           done
-          printf 'Verified release assets:\n'
-          printf '  %s\n' "${debs[@]}"
-      - name: Publish upstream-style Release
+          printf 'Verified release assets:\\n'
+          printf '  %s\\n' "${debs[@]}"
+
+      - name: Publish v3.0 Release
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          version=$(git show "${SOURCE_SHA}:control" | awk -F': ' '$1 == "Version" { print $2; exit }')
+          version=$(awk -F': ' '$1 == "Version" { print $2; exit }' control)
           if [ -z "$version" ]; then
             echo "Cannot read package version from control" >&2
             exit 1
           fi
+
           git fetch --no-tags origin main
           target_sha=$(git rev-parse origin/main)
           if ! git merge-base --is-ancestor "$SOURCE_SHA" "$target_sha"; then
             echo "Build commit is not an ancestor of current main" >&2
             exit 1
           fi
+
           if gh release view v3.0 >/dev/null 2>&1; then
             echo "Release v3.0 already exists; refusing to overwrite it." >&2
             exit 1
           fi
-          gh release create v3.0 *.deb \
-            --target "$target_sha" \
-            --title "v3.0" \
-            --notes "适配抖音 41.2.0。\n\n按越狱环境选择安装包：\n- `*_iphoneos-arm64e.deb` — roothide\n- `*_iphoneos-arm64.deb` — rootless\n- `*_iphoneos-arm.deb` — rootful（传统有根）" \
+
+          gh release create v3.0 *.deb \\
+            --target "$target_sha" \\
+            --title "v3.0" \\
+            --notes "适配抖音 41.2.0。
+
+按越狱环境选择安装包：
+- `*_iphoneos-arm64e.deb` — roothide
+- `*_iphoneos-arm64.deb` — rootless
+- `*_iphoneos-arm.deb` — rootful（传统有根）" \\
             --latest
