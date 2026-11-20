@@ -1,0 +1,69 @@
+name: publish release
+on:
+  workflow_run:
+    workflows:
+      - build deb
+    types:
+      - completed
+    branches:
+      - main
+permissions:
+  actions: read
+  contents: write
+jobs:
+  publish:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download successful build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: DYYY
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Verify packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          debs=( *.deb )
+          if [ "${#debs[@]}" -ne 3 ]; then
+            echo "Expected 3 Debian packages, found ${#debs[@]}" >&2
+            printf '  %s\n' "${debs[@]}" >&2
+            exit 1
+          fi
+          for arch in arm arm64 arm64e; do
+            matches=( *"_iphoneos-${arch}.deb" )
+            if [ "${#matches[@]}" -ne 1 ]; then
+              echo "Expected exactly one ${arch} package" >&2
+              exit 1
+            fi
+          done
+          printf 'Verified release assets:\n'
+          printf '  %s\n' "${debs[@]}"
+      - name: Publish upstream-style Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          version=$(git show "${SOURCE_SHA}:control" | awk -F': ' '$1 == "Version" { print $2; exit }')
+          if [ -z "$version" ]; then
+            echo "Cannot read package version from control" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          target_sha=$(git rev-parse origin/main)
+          if ! git merge-base --is-ancestor "$SOURCE_SHA" "$target_sha"; then
+            echo "Build commit is not an ancestor of current main" >&2
+            exit 1
+          fi
+          if gh release view v3.0 >/dev/null 2>&1; then
+            echo "Release v3.0 already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+          gh release create v3.0 *.deb \
+            --target "$target_sha" \
+            --title "v3.0" \
+            --notes "适配抖音 41.2.0。\n\n按越狱环境选择安装包：\n- `*_iphoneos-arm64e.deb` — roothide\n- `*_iphoneos-arm64.deb` — rootless\n- `*_iphoneos-arm.deb` — rootful（传统有根）" \
+            --latest
