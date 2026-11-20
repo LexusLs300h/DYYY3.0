@@ -2,15 +2,8 @@ name: publish release
 
 on:
   push:
-    branches:
-      - main
-  workflow_run:
-    workflows:
-      - build deb
-    types:
-      - completed
-    branches:
-      - main
+    paths:
+      - ".github/workflows/publish-release.yml"
 
 permissions:
   actions: read
@@ -18,33 +11,19 @@ permissions:
 
 jobs:
   publish:
-    if: (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') || (github.event_name == 'push' && github.event.head_commit.message == 'fix: make v3.0 release workflow runnable and match upstream release')
     runs-on: ubuntu-latest
     steps:
-      - name: Select successful build artifact
-        id: source
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
-        run: |
-          if [ "$EVENT_NAME" = "workflow_run" ]; then
-            echo "run_id=$EVENT_RUN_ID" >> "$GITHUB_OUTPUT"
-          else
-            echo "run_id=44785905540" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Check out release source
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
 
-      - name: Download successful build artifact
+      - name: Download verified build packages
         uses: actions/download-artifact@v4
         with:
           name: DYYY
-          run-id: ${{ steps.source.outputs.run_id }}
+          run-id: 44785905540
           github-token: ${{ github.token }}
 
       - name: Verify packages
@@ -68,20 +47,14 @@ jobs:
           printf 'Verified release assets:\\n'
           printf '  %s\\n' "${debs[@]}"
 
-      - name: Publish v3.0 Release
+      - name: Publish upstream v3.0 Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version=$(awk -F': ' '$1 == "Version" { print $2; exit }' control)
-          if [ "$version" != "3.0.2" ]; then
-            echo "Unexpected package version: $version" >&2
-            exit 1
-          fi
-          if gh release view v3.0 >/dev/null 2>&1; then
-            echo "Release v3.0 already exists; refusing to overwrite it." >&2
-            exit 1
-          fi
+          [ "$version" = "3.0.2" ] || { echo "Unexpected package version: $version" >&2; exit 1; }
+          gh release view v3.0 >/dev/null 2>&1 && { echo "Release v3.0 already exists" >&2; exit 1; } || true
           gh release create v3.0 *.deb \\
             --target "$(git rev-parse HEAD)" \\
             --title "v3.0" \\
